@@ -152,7 +152,7 @@ def monitor_status(settings: Settings, ip: str, ble_device_address: str | None =
                         while nxt + 6 <= len(buf) and not _is_status_header(buf, nxt):
                             nxt += 1
                         if nxt + 6 > len(buf):
-                            buf = buf[-5:]  # no header yet; keep tail for resync
+                            buf = buf[-6:]  # no header yet; keep tail for resync (6 = header prefix length)
                             break
                         buf = buf[nxt:]
                         continue

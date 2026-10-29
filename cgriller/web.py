@@ -1,6 +1,7 @@
 """HTTP dashboard: serves the SPA, the SSE status stream, and command POSTs."""
 
 import csv
+import html
 import http.server
 import json
 import queue
@@ -34,6 +35,17 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            if self.path == "/api/command" and "application/json" not in (self.headers.get("Content-Type") or ""):
+                # CSRF hardening: a cross-site page can send a "simple" POST
+                # (text/plain or form-encoded body) with no CORS preflight;
+                # requiring the JSON Content-Type blocks those. The in-repo
+                # caller (dashboard.html sendCommand) already sends
+                # application/json, so only foreign callers are affected.
+                self.send_response(415)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"ok": False, "error": "Content-Type must be application/json"}).encode())
+                return
             length = int(self.headers.get('Content-Length', 0))
             body = json.loads(self.rfile.read(length)) if length else {}
             if self.path == "/api/command":
@@ -231,7 +243,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.end_headers()
-                self.wfile.write(SESSION_VIEW_HTML.replace("__SESSION_NAME__", name).replace("__SESSION_LABEL__", label).encode())
+                self.wfile.write(SESSION_VIEW_HTML.replace("__SESSION_NAME__", name).replace("__SESSION_LABEL__", html.escape(label)).encode())
             else:
                 self.send_response(404)
                 self.end_headers()
