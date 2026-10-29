@@ -199,15 +199,27 @@ class StatusHistory:
             self.condition.notify_all()
 
     def load_from_csv(self, csv_path: str):
-        """Load historical entries from a previous session CSV file and reopen it for appending."""
+        """Load historical entries from a previous session CSV file and reopen it for appending.
+
+        Atomic by design: every row is parsed into a temporary list first, and
+        the entries, the start_time adjustment and the append-mode file swap
+        commit together only after the full parse succeeds. A truncated or
+        corrupt row therefore aborts the resume cleanly (the caller catches
+        the exception) instead of leaving a half-loaded history with a
+        backwards-running elapsed axis. The commit happens under one
+        history.lock critical section — SSE readers hold entry indexes
+        concurrently and must never observe a partial swap.
+        """
+        def parse_int(v):
+            if v is None or v == "" or v == "None":
+                return None
+            return int(v)
+
+        pending: list[dict] = []
         with open(csv_path, "r") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                def parse_int(v):
-                    if v == "" or v == "None":
-                        return None
-                    return int(v)
-                entry = {
+                pending.append({
                     "t": float(row["elapsed_sec"]),
                     "p1": parse_int(row["probe1_cur"]),
                     "p1_set": parse_int(row["probe1_set"]),
@@ -219,14 +231,22 @@ class StatusHistory:
                     "turbo": row["turbo"] == "1",
                     "door": row["door"] == "1",
                     "alarm": row["alarm"] == "1",
-                }
-                with self.lock:
-                    self.entries.append(entry)
-        # Adjust start_time so new entries continue from where the old session left off
-        if self.entries:
-            last_t = self.entries[-1]["t"]
-            self.start_time = time.time() - last_t
-            print(f"  Resumed {len(self.entries)} readings ({last_t:.0f}s of history)")
+                    # fan_auto/fan_speed exist in newer logs; older session CSVs
+                    # lack the columns (row.get -> None -> fan_speed 0).
+                    "fan_auto": row.get("fan_auto") == "1",
+                    "fan_speed": parse_int(row.get("fan_speed")) or 0,
+                })
+
+        # --- commit point (single critical section) ---
+        with self.lock:
+            self.entries.extend(pending)
+            # Adjust start_time so new entries continue from where the old
+            # session left off.
+            if pending:
+                last_t = pending[-1]["t"]
+                self.start_time = time.time() - last_t
+        if pending:
+            print(f"  Resumed {len(pending)} readings ({pending[-1]['t']:.0f}s of history)")
 
         # Reopen the same file for appending (no header, continues the log)
         self.csv_file.close()

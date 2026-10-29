@@ -81,6 +81,24 @@ def monitor_status(settings: Settings, ip: str, ble_device_address: str | None =
             history.load_from_csv(settings.resume)
         except Exception as e:
             print(f"  Warning: could not load session: {e}")
+    else:
+        # Auto-resume: a restart (crash, deploy, reboot) must not blank the
+        # chart mid-cook. If the newest session CSV was written to recently
+        # (< 8 h since its last row), continue that session instead of
+        # starting a fresh one — the file is reopened for appending and the
+        # elapsed-time axis picks up where it left off.
+        try:
+            # Exclude the session file StatusHistory just created for THIS
+            # run — otherwise it is always the freshest candidate and we would
+            # "resume" our own empty log.
+            newest = max((p for p in LOG_DIR.glob("session_*.csv")
+                          if p.name != history.csv_path.name),
+                         key=lambda p: p.stat().st_mtime, default=None)
+            if newest is not None and time.time() - newest.stat().st_mtime < 8 * 3600:
+                print(f"  Auto-resuming recent session: {newest.name}")
+                history.load_from_csv(str(newest))
+        except Exception as e:
+            print(f"  Warning: auto-resume failed: {e}")
     # Last-seen fan state, updated from every status packet. Used by the
     # reconnect watchdog below: the grill keeps cooking with its last settings
     # when the TCP link drops, so a MANUAL fan % would outlive the link with
