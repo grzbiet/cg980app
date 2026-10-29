@@ -111,9 +111,9 @@
 <script>
 let history = [];
 let uplot = null;
-let zoomMinutes = 'all';  // 'all' or number of minutes to show
-let panOffset = 0;        // seconds offset from latest (0 = latest visible)
-const CHART_COLORS = { p1: '#ff6b35', p2: '#4ecdc4', p3: '#ffe66d' };
+let zoomMinutes = localStorage.getItem('cgrillerZoom') || 'all';  // 'all' or number of minutes; survives refresh
+let panOffset = 0;        // seconds offset from latest (0 = latest visible); transient on purpose
+const CHART_COLORS = { p1: '#ff6b35', p2: '#4ecdc4', p3: '#ffe66d', fan: '#3498db' };
 
 // --- Chart (uPlot) ---
 
@@ -142,6 +142,10 @@ function chartData() {
     history.map(e => clamp(e.p1_set)),
     history.map(e => clamp(e.p2_set)),
     history.map(e => clamp(e.p3_set)),
+    // Fan activity on its own 0-100% scale: real duty % in manual mode,
+    // 0/100 (fan bit on/off) in Auto — the grill does not expose its
+    // internal Auto PID duty over the wire.
+    history.map(e => (e.fan ? (e.fan_speed > 0 ? e.fan_speed : 100) : 0)),
   ];
 }
 
@@ -187,6 +191,7 @@ function makeChart() {
     scales: {
       x: { time: false },
       y: { range: (u, dmin, dmax) => [Math.max(0, dmin - 20), Math.min(window._maxTemp || 500, dmax + 20)] },
+      y2: { range: [0, 105] },
     },
     axes: [
       // Bottom x-axis: elapsed session time in minutes.
@@ -197,6 +202,9 @@ function makeChart() {
         values: (u, vals) => vals.map(v => fmtClock(v)) },
       { scale: 'y', stroke: '#888', grid: { stroke: '#2a2a4a' }, ticks: { stroke: '#2a2a4a' },
         values: (u, vals) => vals.map(v => v + '°') },
+      // Right-side axis for the fan series (0-100%).
+      { scale: 'y2', side: 1, stroke: '#3498db', grid: { show: false }, ticks: { stroke: '#2a2a4a' },
+        values: (u, vals) => vals.map(v => v + '%') },
     ],
     series: [
       {},
@@ -206,6 +214,9 @@ function makeChart() {
       mkSeries('P1 target', CHART_COLORS.p1, [6, 4]),
       mkSeries('P2 target', CHART_COLORS.p2, [6, 4]),
       mkSeries('P3 target', CHART_COLORS.p3, [6, 4]),
+      { label: 'Fan', scale: 'y2', stroke: CHART_COLORS.fan, width: 1.5, dash: [4, 3],
+        points: { show: false }, fill: 'rgba(52, 152, 219, 0.10)',
+        value: (u, v) => (v == null ? '--' : Math.round(v) + '%') },
     ],
     plugins: [eventsPlugin()],
   };
@@ -242,6 +253,7 @@ function updateChart() {
 function setZoom(mins) {
   zoomMinutes = mins;
   panOffset = 0;
+  localStorage.setItem('cgrillerZoom', String(mins));
   document.querySelectorAll('.chart-controls button[id^="z-"]').forEach(b => b.classList.remove('active'));
   const btn = document.getElementById('z-' + mins);
   if (btn) btn.classList.add('active');
@@ -724,6 +736,18 @@ window.addEventListener('resize', () => {
 document.getElementById('muteBtn').textContent = alarmMuted ? 'Unmute' : 'Mute';
 document.getElementById('toneSelect').value = alarmTone;
 document.getElementById('rangeSelect').value = String(chamberRange);
+// Restore the chart zoom level chosen before the last page refresh (pan
+// position intentionally resets to "follow live").
+if (zoomMinutes !== 'all') {
+  const zb = document.getElementById('z-' + zoomMinutes);
+  if (zb) {
+    document.getElementById('z-all').classList.remove('active');
+    zb.classList.add('active');
+  } else {
+    zoomMinutes = 'all';  // stale value with no matching button
+  }
+}
+updatePanButtons();
 </script>
 <div style="text-align:center;padding:20px 0 10px;font-size:11px;color:#555">
   <a href="https://github.com/cg980app/cg980app" target="_blank" rel="noopener" style="color:#666;text-decoration:none">chargrillerd on GitHub</a> &middot; MIT License
