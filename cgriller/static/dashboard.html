@@ -78,6 +78,11 @@
     <option value="40">±40°F</option>
     <option value="50">±50°F</option>
   </select>
+  <span class="settings-label">Chamber alarm:</span>
+  <select class="fan-select" id="chamberAlarmSelect" onchange="setChamberAlarm(this.value)">
+    <option value="on">On</option>
+    <option value="off">Off</option>
+  </select>
   <button class="alarm-set-btn" onclick="testTone()">Test</button>
   <button class="alarm-set-btn" id="muteBtn" onclick="toggleMute()">Mute</button>
 </div>
@@ -382,6 +387,19 @@ function setChamberRange(val) {
   localStorage.setItem('cgrillerChamberRange', chamberRange);
 }
 
+function setChamberAlarm(val) {
+  chamberAlarmEnabled = val === 'on';
+  localStorage.setItem('cgrillerChamberAlarm', val);
+  if (chamberAlarmEnabled) {
+    // Re-enabling is a fresh start: forget any zone the chamber had entered
+    // under a previous enable — otherwise a cold grill the morning after an
+    // Extinguish instantly trips a false "fire may be dying" alarm.
+    chamberReached = false;
+    alarmFiredProbes.delete('probe1_over');
+    alarmFiredProbes.delete('probe1_under');
+  }
+}
+
 function startAlarm(msg) {
   if (alarmFiring) return;
   alarmFiring = true;
@@ -419,6 +437,19 @@ function toggleMute() {
 // Track which probes have fired — won't re-fire until temp drops below target
 let alarmFiredProbes = new Set();
 
+// Charcoal heat-up tracking: chamber drift alarms (over AND under) only make
+// sense AFTER the chamber has entered the current target zone (set ± range).
+// Until then the grill is legitimately in transition — heat-up ramp, or a
+// deliberate cool-down after lowering the target — and stays quiet.
+// Raising/lowering the target resets the tracking: fresh approach, no alarm.
+let chamberReached = false;
+let chamberTargetSeen = null;
+// User-level kill switch for chamber drift alarms. Extinguish turns this off
+// (a dying fire after end-of-cook is expected, not an alarm). Food-probe
+// alarms are unaffected.
+let chamberAlarmEnabled = localStorage.getItem('cgrillerChamberAlarm') !== 'off';
+document.getElementById('chamberAlarmSelect').value = chamberAlarmEnabled ? 'on' : 'off';
+
 function checkAlarms(data) {
   if (alarmFiring) return;
   // Honor an active snooze (from acknowledging an alarm). When it expires,
@@ -440,22 +471,35 @@ function checkAlarms(data) {
     alarmFiredProbes.delete('device');
   }
 
-  // Chamber (probe 1): alarm if it drifts too far over/under the set target,
-  // by the chamber range chosen in the UI.
+  // Chamber (probe 1): drift alarms over/under the set target, by the chamber
+  // range chosen in the UI. SYMMETRIC zone-entry rule: the chamber must first
+  // settle into the current target zone (set ± range) before ANY drift alarm
+  // may fire. Quiet during deliberate transitions (heat-up ramp, cool-down
+  // after lowering the target); beeps only when the chamber leaves a zone it
+  // had entered (real overshoot, or a fire dying mid-cook).
   const c = data.probe1;
-  if (c.connected && c.set !== null) {
+  if (c.connected && c.set !== null && chamberAlarmEnabled) {
     const range = chamberRange;
+    // New target → fresh approach: nothing has "reached" the new zone yet.
+    if (c.set !== chamberTargetSeen) {
+      chamberTargetSeen = c.set;
+      chamberReached = false;
+      alarmFiredProbes.delete('probe1_over');
+      alarmFiredProbes.delete('probe1_under');
+    }
+    const inZone = c.current > c.set - range && c.current < c.set + range;
+    if (inZone) chamberReached = true;
     if (c.current >= c.set + range) {
-      if (!alarmFiredProbes.has('probe1_over')) {
+      if (chamberReached && !alarmFiredProbes.has('probe1_over')) {
         alarmFiredProbes.add('probe1_over');
         startAlarm('Chamber is ' + (c.current - c.set) + '° over target (' + c.current + '/' + c.set + ')');
         return;
       }
     } else { alarmFiredProbes.delete('probe1_over'); }
     if (c.current <= c.set - range) {
-      if (!alarmFiredProbes.has('probe1_under')) {
+      if (chamberReached && !alarmFiredProbes.has('probe1_under')) {
         alarmFiredProbes.add('probe1_under');
-        startAlarm('Chamber is ' + (c.set - c.current) + '° under target (' + c.current + '/' + c.set + ')');
+        startAlarm('Chamber is ' + (c.set - c.current) + '° under target — fire may be dying (' + c.current + '/' + c.set + ')');
         return;
       }
     } else { alarmFiredProbes.delete('probe1_under'); }
