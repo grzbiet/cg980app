@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 
 from .history import StatusHistory
-from .protocol import CMD_IDS, build_tcp_cmd, validate_cmd_value
+from .protocol import CMD_IDS, POWER_OFF_VALUE, POWER_ON_VALUE, build_tcp_cmd, validate_cmd_value
 from .storage import LOG_DIR, list_sessions, load_sessions_meta, rename_session
 
 _STATIC = Path(__file__).parent / "static"
@@ -23,6 +23,11 @@ SESSION_VIEW_HTML = (_STATIC / "session.html").read_text()
 _TARGET_PROFILE_FLAG = {
     "silence": "supports_silence",
     "fan": "supports_fan_control",
+    # Power is only verified on the Auto Akorn (ha-chargriller live-confirm;
+    # our own 2026-10-28 observation). The Gravity 980's TCP command support
+    # is partial and its power path is untested — gate it to fan-capable
+    # profiles until someone verifies it on a Gravity.
+    "power": "supports_fan_control",
 }
 
 
@@ -77,6 +82,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                         self.end_headers()
                         self.wfile.write(json.dumps({"ok": False, "error": err}).encode())
                     else:
+                        if target == "power":
+                            # API takes a friendly 0/1; the wire wants the
+                            # packed-nibble sentinel values.
+                            ivalue = POWER_ON_VALUE if ivalue == 1 else POWER_OFF_VALUE
                         cmd = build_tcp_cmd(CMD_IDS[target], ivalue)
                         self.cmd_queue.put(cmd)
                         self.send_response(200)

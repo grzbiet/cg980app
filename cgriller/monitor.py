@@ -12,15 +12,19 @@ import webbrowser
 from .ble import BleakClient, ble_activate_wifi, ble_authenticate
 from .config import Settings
 from .history import StatusHistory
+from .storage import LOG_DIR
 from .protocol import (
     ALARM_FIRING,
     ALARM_SILENT,
+    CMD_IDS,
+    FAN_AUTO,
     NOTIFY_CHAR_UUID,
     STATUS_PACKET_SIZE,
     TCP_PORT,
     WRITE_CHAR_UUID,
     DeviceStatus,
     ble_status_payload,
+    build_tcp_cmd,
     tcp_cmd_to_ble,
 )
 from .web import start_web_server
@@ -77,6 +81,11 @@ def monitor_status(settings: Settings, ip: str, ble_device_address: str | None =
             history.load_from_csv(settings.resume)
         except Exception as e:
             print(f"  Warning: could not load session: {e}")
+    # Last-seen fan state, updated from every status packet. Used by the
+    # reconnect watchdog below: the grill keeps cooking with its last settings
+    # when the TCP link drops, so a MANUAL fan % would outlive the link with
+    # nobody around to change it. AUTO is the safe default after a drop.
+    fan_watch = {"auto": True, "speed": 0}
     cmd_queue: queue.Queue = queue.Queue()
     server = start_web_server(history, settings.host, settings.port, cmd_queue)
     # 0.0.0.0 isn't a usable browser address — point the user at localhost.
@@ -120,6 +129,14 @@ def monitor_status(settings: Settings, ip: str, ble_device_address: str | None =
                 try:
                     cmd = cmd_queue.get_nowait()
                     sock.send(cmd)
+                    # A power frame (ff 04 ....) redefines the grill's run
+                    # state: the last-seen fan mode is stale the moment it
+                    # lands. Reset the watchdog baseline on send SUCCESS so a
+                    # silently-dropped frame cannot leave it armed either, and
+                    # a post-power-off reconnect never fires a stale FAN_AUTO.
+                    if cmd[:2] == b"\xff\x04":
+                        fan_watch["auto"] = True
+                        fan_watch["speed"] = 0
                     if settings.debug:
                         print(f"\n  [CMD TX] {cmd.hex(' ')}")
                 except (socket.error, OSError, queue.Empty):
@@ -182,6 +199,8 @@ def monitor_status(settings: Settings, ip: str, ble_device_address: str | None =
 
                     status = DeviceStatus.from_bytes(packet)
                     history.add(status)
+                    fan_watch["auto"] = status.fan_auto
+                    fan_watch["speed"] = status.fan_speed
                     output = status.format_display(profile)
                     output += f"\n\n  Last update: {time.strftime('%H:%M:%S')}"
                     output += "\n  Press Ctrl+C to exit"
@@ -221,6 +240,15 @@ def monitor_status(settings: Settings, ip: str, ble_device_address: str | None =
                 sys.stdout.flush()
 
             if reconnected:
+                # Watchdog: if the link dropped while the fan was in MANUAL,
+                # restore AUTO right after reconnecting. The command is queued
+                # and flushed as soon as the fresh TCP connection is up.
+                # Manual 0% (deliberate extinguish) is excluded: restoring AUTO
+                # there would re-light the fire against a still-set target.
+                if (profile.get("supports_fan_control")
+                        and not fan_watch["auto"] and fan_watch["speed"] > 0):
+                    cmd_queue.put(build_tcp_cmd(CMD_IDS["fan"], FAN_AUTO))
+                    print("  Watchdog: fan was MANUAL before the drop — restoring AUTO.")
                 continue
 
             if not ble_device_address:

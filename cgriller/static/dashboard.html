@@ -46,12 +46,14 @@
   .alarm-input::placeholder { color: #555; }
   .alarm-label { font-size: 11px; color: #666; }
   .alarm-set-btn { background: #0f3460; border: 1px solid #1a4a8a; color: #ff6b35; padding: 4px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; }
+  .extinguish-btn { border-color: #e74c3c; color: #ff8878; }
   .alarm-set-btn:hover { background: #1a4a8a; }
   .settings-bar { display: flex; gap: 8px; align-items: center; justify-content: center; max-width: 900px; margin: 0 auto 15px; font-size: 12px; color: #888; }
   .settings-label { color: #666; }
   .fan-control { display: flex; gap: 6px; align-items: center; justify-content: center; margin-top: 8px; }
   .fan-select { background: #0f3460; border: 1px solid #1a4a8a; color: #eee; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
   .alarm-banner { display: none; background: #e74c3c; color: #fff; text-align: center; padding: 14px; font-weight: bold; font-size: 18px; border-radius: 8px; max-width: 900px; margin: 0 auto 15px; animation: pulse 0.5s infinite; cursor: pointer; }
+  .cmd-fail-banner { display: none; background: #7b241c; color: #fff; text-align: center; padding: 10px; font-weight: bold; font-size: 14px; border-radius: 8px; max-width: 900px; margin: 0 auto 15px; cursor: pointer; }
 </style>
 <script src="/static/uPlot.iife.min.js"></script>
 </head>
@@ -60,6 +62,7 @@
 <div class="subtitle" id="timestamp">Connecting...</div>
 <div class="conn-lost" id="conn-status">CONNECTION LOST — Server is not responding</div>
 <div class="alarm-banner" id="alarm-banner" onclick="dismissAlarm()">ALARM — Click to dismiss</div>
+<div class="cmd-fail-banner" id="cmd-fail-banner" onclick="this.style.display='none'"></div>
 <div class="settings-bar" id="alarmInfo">
   <span class="settings-label">Alarm tone:</span>
   <select class="fan-select" id="toneSelect" onchange="setTone(this.value)">
@@ -271,11 +274,24 @@ function updatePanButtons() {
 }
 
 // --- Grill Command API ---
+// Commands to a fire-driving device must not fail silently: a rejected or
+// network-failed Extinguish that looks successful is a safety hole. Show a
+// visible banner until dismissed whenever the server rejects a command.
 function sendCommand(target, value) {
   fetch('/api/command', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({target: target, value: value})
+  }).then(r => r.json()).then(res => {
+    if (!res.ok) {
+      const b = document.getElementById('cmd-fail-banner');
+      b.textContent = 'COMMAND FAILED (' + target + ' ' + value + '): ' + (res.error || 'rejected') + ' — click to dismiss';
+      b.style.display = 'block';
+    }
+  }).catch(() => {
+    const b = document.getElementById('cmd-fail-banner');
+    b.textContent = 'COMMAND FAILED (' + target + ' ' + value + '): network error — click to dismiss';
+    b.style.display = 'block';
   });
 }
 
@@ -305,6 +321,21 @@ function setFan(val) {
   } else {
     sendCommand('fan', parseInt(val));
   }
+}
+
+// End-of-cook: power the grill OFF — fan stops, the charcoal dies out (no
+// draft), and the WiFi module keeps streaming so the cool-down stays visible.
+function extinguishGrill() {
+  if (!window.confirm('Power off the fan? The coals will die out — target is kept and you can resume anytime (Power On). Temperature keeps streaming meanwhile.')) return;
+  stopAlarm();  // an already-firing alarm must not beep through the shutdown
+  sendCommand('silence', 0);  // panel quiet FIRST — commands are ignored once the grill is off
+  setTimeout(function() { sendCommand('fan', 0); }, 800);   // belt & braces
+  setTimeout(function() { sendCommand('power', 0); }, 1600); // then main power off
+  // The fire dying after end-of-cook is expected — mute chamber drift alarms
+  // (food-probe alarms stay on). Re-enable any time via the Chamber alarm select.
+  chamberAlarmEnabled = false;
+  localStorage.setItem('cgrillerChamberAlarm', 'off');
+  document.getElementById('chamberAlarmSelect').value = 'off';
 }
 
 
@@ -594,7 +625,8 @@ function updateUI(data) {
         + '<option value="60"'+(fanVal==='60'?' selected':'')+'>60%</option>'
         + '<option value="80"'+(fanVal==='80'?' selected':'')+'>80%</option>'
         + '<option value="100"'+(fanVal==='100'?' selected':'')+'>100%</option>'
-        + '</select></div>';
+        + '</select> <button class="alarm-set-btn extinguish-btn" onclick="extinguishGrill()"'
+        + ' title="Fan OFF — let the coals die out. Temperature keeps streaming.">Extinguish</button></div>';
     }
     ctrlHtml += '</div>';
   }

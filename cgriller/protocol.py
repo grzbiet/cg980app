@@ -76,12 +76,21 @@ CMD_IDS = {
     "probe3": 0x03,  # probe 3 target
     "silence": 0x05, # silence alarm (value 0x0000)
     "fan": 0x06,     # fan speed (0x1000 = auto)
-    # NOTE: timer (0x01) and power (0x04) use a different command format
-    # (m.b() full-packet builder, not simple m.d()). Do not use with this
-    # simple command structure — it corrupts grill state.
+    # Main power as a simple TCP command: ff 04 1fff = on / ff 04 0fff = off
+    # -> sets status digit v (1=on/heating, 0=off). Framing and the v-digit
+    # effect are live-confirmed on one Auto Akorn by the ha-chargriller
+    # project (ff040fff -> v=0). In our own single live observation
+    # (2026-10-28) the WiFi module kept streaming telemetry after power-off
+    # for the observed window; overnight behaviour, power-on-restore, and
+    # the Gravity 980 are untested — do not treat "stays alive" as a spec.
+    "power": 0x04,
+    # NOTE: timer (0x01) genuinely uses a different full-packet format
+    # (the multi-slot m.b() builder) — do not send through build_tcp_cmd.
 }
 
 FAN_AUTO = 0x1000  # fan-speed sentinel for "auto"
+POWER_ON_VALUE = 0x1FFF   # subcmd-04 packed nibble: v=1 (on/heating)
+POWER_OFF_VALUE = 0x0FFF  # subcmd-04 packed nibble: v=0 (off, WiFi alive)
 
 # Acceptable value ranges per command. Probe 1 is the chamber and lives in the
 # normal smoking range; probes 2/3 are food probes — the device rejects
@@ -92,6 +101,7 @@ CMD_RANGES = {
     "probe3": (50, 350),
     "fan":    (0, 100),  # plus the FAN_AUTO sentinel
     "silence": (0, 0),
+    "power":  (0, 1),    # 0 = off, 1 = on (translated to the 0x0FFF/0x1FFF nibble values)
 }
 
 
