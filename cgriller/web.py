@@ -46,7 +46,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({"ok": False, "error": "Content-Type must be application/json"}).encode())
                 return
-            length = int(self.headers.get('Content-Length', 0))
+            length = min(max(0, int(self.headers.get('Content-Length', 0))), 65536)
             body = json.loads(self.rfile.read(length)) if length else {}
             if self.path == "/api/command":
                 target = body.get("target", "")
