@@ -210,20 +210,27 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     self.end_headers()
                     return
                 entries = []
-                with open(csv_path, "r") as f:
-                    reader = csv.DictReader(f)
-                    for row in reader:
-                        def pint(v):
-                            return int(v) if v and v != "None" else None
-                        entries.append({
-                            "t": float(row["elapsed_sec"]),
-                            "p1": pint(row["probe1_cur"]),
-                            "p1_set": pint(row["probe1_set"]),
-                            "p2": pint(row["probe2_cur"]),
-                            "p2_set": pint(row["probe2_set"]),
-                            "p3": pint(row["probe3_cur"]),
-                            "p3_set": pint(row["probe3_set"]),
-                        })
+                try:
+                    with open(csv_path, "r") as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            def pint(v):
+                                return int(v) if v and v != "None" else None
+                            entries.append({
+                                "t": float(row["elapsed_sec"]),
+                                "p1": pint(row["probe1_cur"]),
+                                "p1_set": pint(row["probe1_set"]),
+                                "p2": pint(row["probe2_cur"]),
+                                "p2_set": pint(row["probe2_set"]),
+                                "p3": pint(row["probe3_cur"]),
+                                "p3_set": pint(row["probe3_set"]),
+                            })
+                except (ValueError, KeyError, TypeError) as e:
+                    self.send_response(500)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"ok": False, "error": f"Corrupt session CSV: {e}"}).encode())
+                    return
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()

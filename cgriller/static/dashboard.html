@@ -362,8 +362,19 @@ let snoozeUntil = 0;  // ms timestamp; while in the future, probe/grill alarms s
 
 function getCtx() {
   if (!alarmCtx) alarmCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (alarmCtx.state === 'suspended') {
+    alarmCtx.resume().catch(function() {});
+  }
   return alarmCtx;
 }
+
+// Unlock AudioContext on first user gesture so background/SSE alarms can play audibly.
+['click', 'touchstart', 'keydown'].forEach(function(evt) {
+  document.addEventListener(evt, function unlockAudio() {
+    try { getCtx(); } catch (e) {}
+    document.removeEventListener(evt, unlockAudio);
+  }, { passive: true });
+});
 
 const TONES = {
   beep: function() {

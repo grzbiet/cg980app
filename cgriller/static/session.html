@@ -162,13 +162,30 @@ fetch('/api/session/data/__SESSION_NAME__').then(r => r.json()).then(data => {
   const duration = data.length ? data[data.length-1].t : 0;
   const durationStr = duration > 3600 ? Math.floor(duration/3600)+'h '+Math.floor(duration%3600/60)+'m' : Math.floor(duration/60)+'m';
   const p1vals = data.filter(e => e.p1 !== null).map(e => e.p1);
+  const p2vals = data.filter(e => e.p2 !== null).map(e => e.p2);
   const p3vals = data.filter(e => e.p3 !== null).map(e => e.p3);
+  function minMaxAvg(vals) {
+    let min = Infinity, max = -Infinity, sum = 0;
+    for (let i = 0; i < vals.length; i++) {
+      const v = vals[i];
+      if (v < min) min = v;
+      if (v > max) max = v;
+      sum += v;
+    }
+    return { min: min, max: max, avg: Math.round(sum / vals.length) };
+  }
   let statsHtml = '<div class="stat-card"><h3>Duration</h3><div class="stat-val">'+durationStr+'</div><div class="stat-detail">'+data.length+' readings</div></div>';
   if (p1vals.length) {
-    statsHtml += '<div class="stat-card"><h3>Chamber</h3><div class="stat-val">'+Math.round(p1vals.reduce((a,b)=>a+b)/p1vals.length)+'&deg;F avg</div><div class="stat-detail">'+Math.min(...p1vals)+'&deg; - '+Math.max(...p1vals)+'&deg;</div></div>';
+    const s = minMaxAvg(p1vals);
+    statsHtml += '<div class="stat-card"><h3>Chamber</h3><div class="stat-val">'+s.avg+'&deg;F avg</div><div class="stat-detail">'+s.min+'&deg; - '+s.max+'&deg;</div></div>';
+  }
+  if (p2vals.length) {
+    const s = minMaxAvg(p2vals);
+    statsHtml += '<div class="stat-card"><h3>Probe 2</h3><div class="stat-val">'+s.avg+'&deg;F avg</div><div class="stat-detail">'+s.min+'&deg; - '+s.max+'&deg;</div></div>';
   }
   if (p3vals.length) {
-    statsHtml += '<div class="stat-card"><h3>Probe 3</h3><div class="stat-val">'+Math.round(p3vals.reduce((a,b)=>a+b)/p3vals.length)+'&deg;F avg</div><div class="stat-detail">'+Math.min(...p3vals)+'&deg; - '+Math.max(...p3vals)+'&deg;</div></div>';
+    const s = minMaxAvg(p3vals);
+    statsHtml += '<div class="stat-card"><h3>Probe 3</h3><div class="stat-val">'+s.avg+'&deg;F avg</div><div class="stat-detail">'+s.min+'&deg; - '+s.max+'&deg;</div></div>';
   }
   document.getElementById('stats').innerHTML = statsHtml;
 });

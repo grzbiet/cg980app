@@ -238,18 +238,43 @@ class StatusHistory:
                 })
 
         # --- commit point (single critical section) ---
+        target_path = Path(csv_path)
+        old_path = self.csv_path
         with self.lock:
             self.entries.extend(pending)
-            # Adjust start_time so new entries continue from where the old
-            # session left off.
+            # Derive original session start_time from the session_YYYYMMDD_HHMMSS
+            # filename when possible so wall-clock times (start_epoch + t) do not
+            # shift forward by the downtime gap; fall back to time.time() - last_t.
             if pending:
                 last_t = pending[-1]["t"]
-                self.start_time = time.time() - last_t
+                parsed_epoch = None
+                stem = target_path.stem
+                if stem.startswith("session_"):
+                    try:
+                        parsed_epoch = time.mktime(time.strptime(stem[len("session_"):], "%Y%m%d_%H%M%S"))
+                    except ValueError:
+                        parsed_epoch = None
+                if parsed_epoch is not None and time.time() - parsed_epoch >= last_t:
+                    self.start_time = parsed_epoch
+                else:
+                    self.start_time = time.time() - last_t
+                # Seed notified_targets from historical entries so food probes
+                # already at/above target do not fire a duplicate event on resume.
+                for e in pending:
+                    for key_cur, key_set, label in [("p2", "p2_set", "Probe 2"), ("p3", "p3_set", "Probe 3")]:
+                        cur_v, set_v = e.get(key_cur), e.get(key_set)
+                        if cur_v is not None and set_v is not None and cur_v >= set_v:
+                            self.notified_targets.add(f"{label}_{set_v}")
+
+            # Reopen the resumed file for appending and remove the unused header-only
+            # file created by __init__ so it never litters LOG_DIR or poisons auto-resume.
+            self.csv_file.close()
+            if old_path != target_path and old_path.exists() and old_path.stat().st_size <= 135:
+                old_path.unlink(missing_ok=True)
+            self.csv_path = target_path
+            self.session_name = target_path.stem
+            self.csv_file = open(target_path, "a", newline="")
+            self.csv_writer = csv.writer(self.csv_file)
+
         if pending:
             print(f"  Resumed {len(pending)} readings ({pending[-1]['t']:.0f}s of history)")
-
-        # Reopen the same file for appending (no header, continues the log)
-        self.csv_file.close()
-        self.csv_path = Path(csv_path)
-        self.csv_file = open(csv_path, "a", newline="")
-        self.csv_writer = csv.writer(self.csv_file)

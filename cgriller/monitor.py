@@ -89,10 +89,10 @@ def monitor_status(settings: Settings, ip: str, ble_device_address: str | None =
         # elapsed-time axis picks up where it left off.
         try:
             # Exclude the session file StatusHistory just created for THIS
-            # run — otherwise it is always the freshest candidate and we would
-            # "resume" our own empty log.
+            # run (and any empty header-only orphan CSVs <= 135 bytes) —
+            # otherwise an empty file could be picked as the freshest candidate.
             newest = max((p for p in LOG_DIR.glob("session_*.csv")
-                          if p.name != history.csv_path.name),
+                          if p.name != history.csv_path.name and p.stat().st_size > 135),
                          key=lambda p: p.stat().st_mtime, default=None)
             if newest is not None and time.time() - newest.stat().st_mtime < 8 * 3600:
                 print(f"  Auto-resuming recent session: {newest.name}")

@@ -218,7 +218,7 @@ class DeviceStatus:
         if profile["show_fan"]:
             if self.fan_auto:
                 fan_str = "Auto"
-            elif self.fan_speed > 0:
+            elif self.fan_speed > 0 or profile.get("supports_fan_control"):
                 fan_str = f"{self.fan_speed}%"
             elif self.fan_turbo:
                 fan_str = "Turbo"
@@ -256,6 +256,8 @@ class WifiInfo:
         Parse a type-0x00/subtype-0x20 BLE notification (Akorn format).
         Format: [0x00][0x20][len_lo][len_hi][0x00][ssid_len][ssid...][bssid x6][ip x4][mask x4][gw x4]
         """
+        if len(data) < 6 or len(data) < 6 + data[5] + 18:
+            raise ValueError(f"Truncated Akorn WiFi notification ({len(data)} bytes)")
         ssid_len = data[5]
         offset = 6
         ssid = data[offset:offset + ssid_len].decode("utf-8", errors="replace")
@@ -275,8 +277,10 @@ class WifiInfo:
         Parse a type-0x07 BLE notification payload (Gravity 980 format).
         Format: [type=0x07][status][signal][reserved x2][ssid_len][ssid...][bssid x6][ip x4][mask x4][gw x4]
         """
-        if data[0] != MSG_TYPE_WIFI_INFO:
-            raise ValueError(f"Expected message type 0x07, got 0x{data[0]:02x}")
+        if not data or data[0] != MSG_TYPE_WIFI_INFO:
+            raise ValueError(f"Expected message type 0x07, got 0x{data[0]:02x}" if data else "Empty notification")
+        if len(data) < 6 or len(data) < 6 + data[5] + 18:
+            raise ValueError(f"Truncated WiFi info notification ({len(data)} bytes)")
 
         ssid_len = data[5]
         offset = 6

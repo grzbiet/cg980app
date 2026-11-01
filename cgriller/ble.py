@@ -44,8 +44,9 @@ async def scan_for_devices(timeout: float = 8.0, adapter: str | None = None) -> 
 
     found_devices = []
     for addr, (device, adv_data) in devices.items():
-        if device.name and ("Akorn" in device.name or "Gravity" in device.name or "BLEWIFI" in device.name):
-            found_devices.append((device.address, device.name, adv_data.rssi, adapter))
+        name = device.name or getattr(adv_data, "local_name", None) or ""
+        if name and ("Akorn" in name or "Gravity" in name or "BLEWIFI" in name):
+            found_devices.append((device.address, name, adv_data.rssi, adapter))
 
     return found_devices
 
@@ -66,9 +67,21 @@ async def ble_activate_wifi(device_address: str, adapter: str | None = None, deb
 
     def notification_handler(sender, data: bytes):
         nonlocal wifi_info
-        if len(data) > 0 and data[0] == MSG_TYPE_WIFI_INFO:
-            wifi_info = WifiInfo.from_notification(data)
-            event.set()
+        if not data:
+            return
+        try:
+            if data[0] == MSG_TYPE_WIFI_INFO:
+                info = WifiInfo.from_notification(data)
+                if info.ip and info.ip != "0.0.0.0":
+                    wifi_info = info
+                    event.set()
+            elif len(data) > 4 and data[0] == 0x00 and data[1] == 0x20:
+                info = WifiInfo.from_status_notification(data)
+                if info.ip and info.ip != "0.0.0.0":
+                    wifi_info = info
+                    event.set()
+        except ValueError:
+            pass
 
     print(f"Connecting to {device_address} via BLE...")
     try:
@@ -229,24 +242,32 @@ async def ble_full_provision(device_address: str, adapter: str | None = None, ss
 
     def handler(sender, data: bytes):
         nonlocal wifi_info, detected_model
+        if not data:
+            return
         if debug:
             print(f"  [BLE RX {len(data)}B] {data.hex(' ')}")
-        if len(data) > 0 and data[0] == MSG_TYPE_WIFI_INFO:
-            info = WifiInfo.from_notification(data)
+        if data[0] == MSG_TYPE_WIFI_INFO:
+            try:
+                info = WifiInfo.from_notification(data)
+            except ValueError:
+                return
             if debug:
                 print(f"    -> WiFi info (0x07): SSID='{info.ssid}' IP={info.ip}")
-            if info.ip != "0.0.0.0":
+            if info.ip and info.ip != "0.0.0.0":
                 wifi_info = info
                 detected_model = "gravity"  # type-0x07 is the Gravity 980 format
                 wifi_event.set()
         elif data[0] == 0x00 and len(data) > 4 and data[1] == 0x20:
             # Akorn-style WiFi connected notification
-            info = WifiInfo.from_status_notification(data)
+            try:
+                info = WifiInfo.from_status_notification(data)
+            except ValueError:
+                return
             if debug:
                 print(f"    -> WiFi info (0x20): SSID='{info.ssid}' IP={info.ip}")
-            if info.ip != "0.0.0.0":
+            if info.ip and info.ip != "0.0.0.0":
                 wifi_info = info
-                detected_model = "akorn"  # type-0x00/0x20 is the Akorn format
+                detected_model = "akorn"  # type-00/0x20 is the Akorn format
                 wifi_event.set()
         elif data[0] == 0x02:
             if debug:
